@@ -19,11 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/caarlos0/env/v6"
 
+	"github.com/ossf/scorecard/v4/checker"
 	"github.com/ossf/scorecard/v4/clients"
 	"github.com/ossf/scorecard/v4/log"
+	"github.com/ossf/scorecard/v4/policy"
 )
 
 // Options define common options for configuring scorecard.
@@ -113,8 +116,11 @@ var (
 	errRepoOptionMustBeSet      = errors.New(
 		"exactly one of `repo`, `npm`, `pypi`, `rubygems` or `local` must be set",
 	)
-	errSARIFNotSupported = errors.New("SARIF format is not supported yet")
-	errValidate          = errors.New("some options could not be validated")
+	errSARIFNotSupported            = errors.New("SARIF format is not supported yet")
+	errValidate                     = errors.New("some options could not be validated")
+	errBranchProtectionNotSupported = errors.New("Branch-Protection check is not supported for local repositories")
+	errSignedReleasesNotSupported   = errors.New("Signed-Releases check is not supported for local repositories")
+	errCIIBestBadgeNotSupported     = errors.New("CII-Best-Practices check is not supported for local repositories")
 )
 
 // Validate validates scorecard configuration options.
@@ -187,6 +193,13 @@ func (o *Options) Validate() error {
 		)
 	}
 
+	if err := o.isValidForLocalRepo(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := o.isValidForNonLocalRepo(); err != nil {
+		errs = append(errs, err)
+	}
+
 	if len(errs) != 0 {
 		return fmt.Errorf(
 			"%w: %+v",
@@ -239,4 +252,45 @@ func validateFormat(format string) bool {
 	default:
 		return false
 	}
+}
+
+// isValidForLocalRepo returns an error if the check is not valid for local repository.
+func (o *Options) isValidForLocalRepo() error {
+	if o.Local == "" {
+		return nil
+	}
+	var requiredRequestTypes []checker.RequestType
+	requiredRequestTypes = append(requiredRequestTypes, checker.FileBased)
+
+	for _, check := range o.ChecksToRun {
+		if !policy.IsSupportedCheck(check, requiredRequestTypes) {
+			// Too many errors need to be created to satisfy the linter.
+			//nolint
+			return fmt.Errorf(
+				"check %s is not supported for local repositories",
+				check,
+			)
+		}
+	}
+	return nil
+}
+
+// isValidForNonLocalRepo returns an error if the check is not valid for non-local repository.
+func (o *Options) isValidForNonLocalRepo() error {
+	var requiredRequestTypes []checker.RequestType
+	if !strings.EqualFold(o.Commit, clients.HeadSHA) {
+		requiredRequestTypes = append(requiredRequestTypes, checker.CommitBased)
+	}
+
+	for _, check := range o.ChecksToRun {
+		if !policy.IsSupportedCheck(check, requiredRequestTypes) {
+			// Too many errors need to be created to satisfy the linter.
+			//nolint
+			return fmt.Errorf(
+				"check %s is not supported for non-local repositories",
+				check,
+			)
+		}
+	}
+	return nil
 }
